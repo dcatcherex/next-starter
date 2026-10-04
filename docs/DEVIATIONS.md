@@ -4,7 +4,7 @@ Where current docs/CLIs differed from the plan (the docs won).
 
 ## Phase 1
 
-- **pnpm version:** create-next-app wrote `"packageManager": "pnpm@12.9.0"` (the pnpm that ran in this environment), not 11.5.1.
+- **pnpm version:** create-next-app wrote `"packageManager": "pnpm@12.9.0"`; pinned back to 11.5.1 and removed the stale pnpm self-install section from the lockfile.
 - **shadcn init flags:** `--preset base-nova` is rejected (`Invalid preset`; presets are nova, vega, maia, ...). Used `shadcn init --preset nova --base base --yes`, which produced a `components.json` identical to my-care's (style `base-nova`, neutral, lucide, menuColor default, menuAccent subtle). Added `registries["@starter"]` by hand.
 - **`cn` package:** current shadcn generates `import { cn } from "cn"` and `lib/utils.ts` as `export { cn } from "cn"` (the `cn` npm package, same as my-care). Kept as generated.
 - **`form` component:** does not exist for base-nova. Used `field` (`Field`, `FieldGroup`, `FieldLabel`, `FieldError`) with react-hook-form `Controller` + zod, per current shadcn rules.
