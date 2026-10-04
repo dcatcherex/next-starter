@@ -1,7 +1,7 @@
 {
   "$schema": "https://ui.shadcn.com/schema/registry.json",
   "name": "starter",
-  "homepage": "https://next-starter.vercel.app",
+  "homepage": "https://dcatcherex-starter.vercel.app",
   "items": [
     {
       "name": "storage-vercel-blob",
