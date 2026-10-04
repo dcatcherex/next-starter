@@ -1,0 +1,25 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "clerk-webhook-sync",
+  "title": "Clerk webhook user sync",
+  "description": "Adds a users table and /api/webhooks/clerk (user.created/updated/deleted upsert/delete). Requires env CLERK_WEBHOOK_SIGNING_SECRET. After install run `pnpm db:generate && pnpm db:migrate`.",
+  "files": [
+    {
+      "path": "registry/clerk-webhook-sync/users.ts",
+      "content": "import { pgTable, text, timestamp } from \"drizzle-orm/pg-core\";\n\n/** Mirror of Clerk users, kept in sync by /api/webhooks/clerk. */\nexport const users = pgTable(\"users\", {\n  id: text(\"id\").primaryKey(), // Clerk user id\n  email: text(\"email\"),\n  name: text(\"name\"),\n  imageUrl: text(\"image_url\"),\n  createdAt: timestamp(\"created_at\", { withTimezone: true })\n    .notNull()\n    .defaultNow(),\n  updatedAt: timestamp(\"updated_at\", { withTimezone: true })\n    .notNull()\n    .defaultNow()\n    .$onUpdate(() => new Date()),\n});\n\nexport type User = typeof users.$inferSelect;\n",
+      "type": "registry:file",
+      "target": "~/db/schema/users.ts"
+    },
+    {
+      "path": "registry/clerk-webhook-sync/route.ts",
+      "content": "import { verifyWebhook } from \"@clerk/nextjs/webhooks\";\nimport { eq } from \"drizzle-orm\";\nimport type { NextRequest } from \"next/server\";\n\nimport { db } from \"@/db\";\nimport { users } from \"@/db/schema/users\";\n\nexport async function POST(req: NextRequest) {\n  let evt;\n  try {\n    // Reads CLERK_WEBHOOK_SIGNING_SECRET automatically\n    evt = await verifyWebhook(req);\n  } catch (err) {\n    console.error(\"Clerk webhook verification failed:\", err);\n    return new Response(\"Verification failed\", { status: 400 });\n  }\n\n  if (evt.type === \"user.created\" || evt.type === \"user.updated\") {\n    const u = evt.data;\n    const primary =\n      u.email_addresses.find((e) => e.id === u.primary_email_address_id) ??\n      u.email_addresses[0];\n    const values = {\n      id: u.id,\n      email: primary?.email_address ?? null,\n      name: [u.first_name, u.last_name].filter(Boolean).join(\" \") || null,\n      imageUrl: u.image_url || null,\n    };\n    await db\n      .insert(users)\n      .values(values)\n      .onConflictDoUpdate({\n        target: users.id,\n        set: {\n          email: values.email,\n          name: values.name,\n          imageUrl: values.imageUrl,\n          updatedAt: new Date(),\n        },\n      });\n  }\n\n  if (evt.type === \"user.deleted\" && evt.data.id) {\n    await db.delete(users).where(eq(users.id, evt.data.id));\n  }\n\n  return new Response(\"OK\", { status: 200 });\n}\n",
+      "type": "registry:file",
+      "target": "~/app/api/webhooks/clerk/route.ts"
+    }
+  ],
+  "envVars": {
+    "CLERK_WEBHOOK_SIGNING_SECRET": ""
+  },
+  "docs": "1) pnpm db:generate && pnpm db:migrate. 2) In the Clerk dashboard add an endpoint https://YOUR-DOMAIN/api/webhooks/clerk subscribed to user.created, user.updated, user.deleted and copy the signing secret to CLERK_WEBHOOK_SIGNING_SECRET. 3) Local dev: `clerk webhooks listen --token \"$(clerk webhooks token)\" --forward-to http://localhost:3000/api/webhooks/clerk` or a tunnel. The route is already public in proxy.ts.",
+  "type": "registry:item"
+}

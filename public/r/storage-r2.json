@@ -1,0 +1,39 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "storage-r2",
+  "title": "Storage: Cloudflare R2",
+  "description": "Implements lib/storage/* with Cloudflare R2 (S3 API, presigned direct uploads). Requires env R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, optional R2_PUBLIC_URL. Bucket needs a CORS rule allowing PUT from the app origin. Replaces the base stubs: install with --overwrite.",
+  "dependencies": [
+    "@aws-sdk/client-s3",
+    "@aws-sdk/s3-request-presigner"
+  ],
+  "files": [
+    {
+      "path": "registry/storage-r2/server.ts",
+      "content": "import \"server-only\";\n\nimport {\n  DeleteObjectCommand,\n  GetObjectCommand,\n  S3Client,\n} from \"@aws-sdk/client-s3\";\nimport { getSignedUrl } from \"@aws-sdk/s3-request-presigner\";\nimport { z } from \"zod\";\n\nconst r2Env = z.object({\n  R2_ACCOUNT_ID: z.string().min(1),\n  R2_ACCESS_KEY_ID: z.string().min(1),\n  R2_SECRET_ACCESS_KEY: z.string().min(1),\n  R2_BUCKET: z.string().min(1),\n  R2_PUBLIC_URL: z.string().url().optional(),\n});\n\nlet cached: { client: S3Client; cfg: z.infer<typeof r2Env> } | undefined;\n\nfunction r2() {\n  if (!cached) {\n    const cfg = r2Env.parse({\n      ...process.env,\n      R2_PUBLIC_URL: process.env.R2_PUBLIC_URL || undefined,\n    });\n    cached = {\n      cfg,\n      client: new S3Client({\n        region: \"auto\",\n        endpoint: `https://${cfg.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,\n        credentials: {\n          accessKeyId: cfg.R2_ACCESS_KEY_ID,\n          secretAccessKey: cfg.R2_SECRET_ACCESS_KEY,\n        },\n      }),\n    };\n  }\n  return cached;\n}\n\n/** Public URL if `R2_PUBLIC_URL` is set, otherwise a 1h presigned GET URL. */\nexport async function getFileUrl(key: string): Promise<string> {\n  const { client, cfg } = r2();\n  if (cfg.R2_PUBLIC_URL) {\n    return `${cfg.R2_PUBLIC_URL.replace(/\\/+$/, \"\")}/${key}`;\n  }\n  return getSignedUrl(\n    client,\n    new GetObjectCommand({ Bucket: cfg.R2_BUCKET, Key: key }),\n    { expiresIn: 3600 },\n  );\n}\n\nexport async function deleteFile(key: string): Promise<void> {\n  const { client, cfg } = r2();\n  await client.send(\n    new DeleteObjectCommand({ Bucket: cfg.R2_BUCKET, Key: key }),\n  );\n}\n",
+      "type": "registry:file",
+      "target": "~/lib/storage/server.ts"
+    },
+    {
+      "path": "registry/storage-r2/client.ts",
+      "content": "import type { StoredFile } from \"./types\";\n\n/**\n * Direct-from-client upload: ask `/api/upload` for a presigned PUT URL, then\n * PUT the file straight to R2. The bucket needs a CORS rule allowing PUT from\n * the app origin (see README).\n */\nexport async function uploadFile(\n  file: File,\n  opts?: { folder?: string },\n): Promise<StoredFile> {\n  const res = await fetch(\"/api/upload\", {\n    method: \"POST\",\n    headers: { \"Content-Type\": \"application/json\" },\n    body: JSON.stringify({\n      filename: file.name,\n      contentType: file.type,\n      size: file.size,\n      folder: opts?.folder,\n    }),\n  });\n  if (!res.ok) {\n    const { error } = (await res.json().catch(() => ({}))) as {\n      error?: string;\n    };\n    throw new Error(error ?? \"Failed to get upload URL\");\n  }\n  const { uploadUrl, key, readUrl } = (await res.json()) as {\n    uploadUrl: string;\n    key: string;\n    readUrl: string;\n  };\n\n  const put = await fetch(uploadUrl, {\n    method: \"PUT\",\n    headers: { \"Content-Type\": file.type },\n    body: file,\n  });\n  if (!put.ok) throw new Error(`Upload failed (${put.status})`);\n\n  return { key, url: readUrl };\n}\n",
+      "type": "registry:file",
+      "target": "~/lib/storage/client.ts"
+    },
+    {
+      "path": "registry/storage-r2/route.ts",
+      "content": "import { auth } from \"@clerk/nextjs/server\";\nimport {\n  GetObjectCommand,\n  PutObjectCommand,\n  S3Client,\n} from \"@aws-sdk/client-s3\";\nimport { getSignedUrl } from \"@aws-sdk/s3-request-presigner\";\nimport { NextResponse } from \"next/server\";\nimport { z } from \"zod\";\n\nconst ALLOWED_CONTENT_TYPES = [\n  \"image/jpeg\",\n  \"image/png\",\n  \"image/webp\",\n  \"image/gif\",\n  \"application/pdf\",\n];\nconst MAX_SIZE = 10 * 1024 * 1024; // 10 MB\n\nconst bodySchema = z.object({\n  filename: z.string().min(1).max(255),\n  contentType: z.string().refine((t) => ALLOWED_CONTENT_TYPES.includes(t), {\n    message: \"Unsupported content type\",\n  }),\n  size: z.number().int().positive().max(MAX_SIZE),\n  folder: z.string().max(100).optional(),\n});\n\nconst r2Env = z.object({\n  R2_ACCOUNT_ID: z.string().min(1),\n  R2_ACCESS_KEY_ID: z.string().min(1),\n  R2_SECRET_ACCESS_KEY: z.string().min(1),\n  R2_BUCKET: z.string().min(1),\n  R2_PUBLIC_URL: z.string().url().optional(),\n});\n\nexport async function POST(request: Request): Promise<NextResponse> {\n  const { userId } = await auth();\n  if (!userId) {\n    return NextResponse.json({ error: \"Unauthorized\" }, { status: 401 });\n  }\n\n  const parsed = bodySchema.safeParse(await request.json().catch(() => null));\n  if (!parsed.success) {\n    return NextResponse.json(\n      { error: parsed.error.issues[0]?.message ?? \"Invalid body\" },\n      { status: 400 },\n    );\n  }\n  const { filename, contentType, size, folder } = parsed.data;\n\n  const cfg = r2Env.parse({\n    ...process.env,\n    R2_PUBLIC_URL: process.env.R2_PUBLIC_URL || undefined,\n  });\n  const client = new S3Client({\n    region: \"auto\",\n    endpoint: `https://${cfg.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,\n    credentials: {\n      accessKeyId: cfg.R2_ACCESS_KEY_ID,\n      secretAccessKey: cfg.R2_SECRET_ACCESS_KEY,\n    },\n  });\n\n  const safeName = filename.replace(/[^\\w.-]+/g, \"_\");\n  const safeFolder = (folder ?? \"\")\n    .split(\"/\")\n    .map((s) => s.replace(/[^\\w-]+/g, \"_\"))\n    .filter(Boolean)\n    .join(\"/\");\n  const key = [userId, safeFolder, `${crypto.randomUUID()}-${safeName}`]\n    .filter(Boolean)\n    .join(\"/\");\n\n  const uploadUrl = await getSignedUrl(\n    client,\n    new PutObjectCommand({\n      Bucket: cfg.R2_BUCKET,\n      Key: key,\n      ContentType: contentType,\n      ContentLength: size,\n    }),\n    { expiresIn: 300 },\n  );\n\n  // URL to read the file back: public if configured, else 1h presigned GET.\n  const readUrl = cfg.R2_PUBLIC_URL\n    ? `${cfg.R2_PUBLIC_URL.replace(/\\/+$/, \"\")}/${key}`\n    : await getSignedUrl(\n        client,\n        new GetObjectCommand({ Bucket: cfg.R2_BUCKET, Key: key }),\n        { expiresIn: 3600 },\n      );\n\n  return NextResponse.json({ uploadUrl, key, readUrl });\n}\n",
+      "type": "registry:file",
+      "target": "~/app/api/upload/route.ts"
+    }
+  ],
+  "envVars": {
+    "R2_ACCOUNT_ID": "",
+    "R2_ACCESS_KEY_ID": "",
+    "R2_SECRET_ACCESS_KEY": "",
+    "R2_BUCKET": "",
+    "R2_PUBLIC_URL": ""
+  },
+  "docs": "Add a CORS rule to the R2 bucket: [{\"AllowedOrigins\":[\"http://localhost:3000\",\"https://YOUR-APP.vercel.app\"],\"AllowedMethods\":[\"PUT\",\"GET\"],\"AllowedHeaders\":[\"*\"],\"MaxAgeSeconds\":3600}]. R2_PUBLIC_URL is optional (custom domain / r2.dev); without it, getFileUrl returns 1h presigned GET URLs.",
+  "type": "registry:item"
+}

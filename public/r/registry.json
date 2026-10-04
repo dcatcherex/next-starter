@@ -1,0 +1,85 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry.json",
+  "name": "starter",
+  "homepage": "https://next-starter.vercel.app",
+  "items": [
+    {
+      "name": "storage-vercel-blob",
+      "type": "registry:item",
+      "title": "Storage: Vercel Blob",
+      "description": "Implements lib/storage/* with Vercel Blob (direct client uploads, auth-checked token route). Requires env BLOB_READ_WRITE_TOKEN (vercel blob store / Vercel dashboard). Replaces the base stubs: install with --overwrite.",
+      "dependencies": ["@vercel/blob"],
+      "envVars": { "BLOB_READ_WRITE_TOKEN": "" },
+      "docs": "Set BLOB_READ_WRITE_TOKEN (create a Blob store in the Vercel dashboard and run `vercel env pull .env.local`). Upload with uploadFile() from lib/storage/client.ts.",
+      "files": [
+        {
+          "path": "registry/storage-vercel-blob/server.ts",
+          "type": "registry:file",
+          "target": "~/lib/storage/server.ts"
+        },
+        {
+          "path": "registry/storage-vercel-blob/client.ts",
+          "type": "registry:file",
+          "target": "~/lib/storage/client.ts"
+        },
+        {
+          "path": "registry/storage-vercel-blob/route.ts",
+          "type": "registry:file",
+          "target": "~/app/api/upload/route.ts"
+        }
+      ]
+    },
+    {
+      "name": "storage-r2",
+      "type": "registry:item",
+      "title": "Storage: Cloudflare R2",
+      "description": "Implements lib/storage/* with Cloudflare R2 (S3 API, presigned direct uploads). Requires env R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, optional R2_PUBLIC_URL. Bucket needs a CORS rule allowing PUT from the app origin. Replaces the base stubs: install with --overwrite.",
+      "dependencies": ["@aws-sdk/client-s3", "@aws-sdk/s3-request-presigner"],
+      "envVars": {
+        "R2_ACCOUNT_ID": "",
+        "R2_ACCESS_KEY_ID": "",
+        "R2_SECRET_ACCESS_KEY": "",
+        "R2_BUCKET": "",
+        "R2_PUBLIC_URL": ""
+      },
+      "docs": "Add a CORS rule to the R2 bucket: [{\"AllowedOrigins\":[\"http://localhost:3000\",\"https://YOUR-APP.vercel.app\"],\"AllowedMethods\":[\"PUT\",\"GET\"],\"AllowedHeaders\":[\"*\"],\"MaxAgeSeconds\":3600}]. R2_PUBLIC_URL is optional (custom domain / r2.dev); without it, getFileUrl returns 1h presigned GET URLs.",
+      "files": [
+        {
+          "path": "registry/storage-r2/server.ts",
+          "type": "registry:file",
+          "target": "~/lib/storage/server.ts"
+        },
+        {
+          "path": "registry/storage-r2/client.ts",
+          "type": "registry:file",
+          "target": "~/lib/storage/client.ts"
+        },
+        {
+          "path": "registry/storage-r2/route.ts",
+          "type": "registry:file",
+          "target": "~/app/api/upload/route.ts"
+        }
+      ]
+    },
+    {
+      "name": "clerk-webhook-sync",
+      "type": "registry:item",
+      "title": "Clerk webhook user sync",
+      "description": "Adds a users table and /api/webhooks/clerk (user.created/updated/deleted upsert/delete). Requires env CLERK_WEBHOOK_SIGNING_SECRET. After install run `pnpm db:generate && pnpm db:migrate`.",
+      "envVars": { "CLERK_WEBHOOK_SIGNING_SECRET": "" },
+      "docs": "1) pnpm db:generate && pnpm db:migrate. 2) In the Clerk dashboard add an endpoint https://YOUR-DOMAIN/api/webhooks/clerk subscribed to user.created, user.updated, user.deleted and copy the signing secret to CLERK_WEBHOOK_SIGNING_SECRET. 3) Local dev: `clerk webhooks listen --token \"$(clerk webhooks token)\" --forward-to http://localhost:3000/api/webhooks/clerk` or a tunnel. The route is already public in proxy.ts.",
+      "files": [
+        {
+          "path": "registry/clerk-webhook-sync/users.ts",
+          "type": "registry:file",
+          "target": "~/db/schema/users.ts"
+        },
+        {
+          "path": "registry/clerk-webhook-sync/route.ts",
+          "type": "registry:file",
+          "target": "~/app/api/webhooks/clerk/route.ts"
+        }
+      ]
+    }
+  ]
+}
